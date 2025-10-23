@@ -1,19 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, Upload, PlusCircle, Trash2 } from "lucide-react";
-import {
-  LineChart,
-  Line,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  RadarChart,
-  Radar,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-} from "recharts";
+import { PlusCircle, Trash2 } from "lucide-react";
 
 /* ------------------------------- Types ----------------------------------- */
 type Category = "push" | "pull" | "legs";
@@ -47,12 +33,26 @@ async function loadFromKV(): Promise<Store | null> {
   }
 }
 
+async function pushToKV(store: Store) {
+  await fetch("/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(store),
+  });
+}
+
+function mergeStores(a: Store, b: Store): Store {
+  const ids = new Set(a.sets.map((s) => s.id));
+  const merged = [...a.sets];
+  for (const s of b.sets) if (!ids.has(s.id)) merged.push(s);
+  merged.sort((x, y) => x.date.localeCompare(y.date));
+  return { ...a, sets: merged };
+}
+
 async function syncToKV(local: Store) {
   try {
-    // Pull latest
     const remote = await loadFromKV();
     if (remote) {
-      // Merge unique sets
       const combined = mergeStores(remote, local);
       await pushToKV(combined);
     } else {
@@ -63,34 +63,15 @@ async function syncToKV(local: Store) {
   }
 }
 
-async function pushToKV(store: Store) {
-  await fetch("/sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(store),
-  });
-}
-
-/* ------------------------------ Merge Logic ------------------------------ */
-function mergeStores(a: Store, b: Store): Store {
-  const ids = new Set(a.sets.map((s) => s.id));
-  const merged = [...a.sets];
-  for (const s of b.sets) {
-    if (!ids.has(s.id)) merged.push(s);
-  }
-  // Sort by date
-  merged.sort((x, y) => x.date.localeCompare(y.date));
-  return { ...a, sets: merged };
-}
-
 /* -------------------------------- Component ------------------------------- */
 export default function App() {
-  // Service Worker registration
+  // Service Worker
   useEffect(() => {
     if ("serviceWorker" in navigator)
       navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
 
+  // Store State
   const [store, setStore] = useState<Store>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -99,13 +80,11 @@ export default function App() {
       return { units: "lb", sets: [] };
     }
   });
-
-  // Persist to localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   }, [store]);
 
-  // Auto-sync every 15s and on mount
+  // Sync on mount + interval
   useEffect(() => {
     (async () => {
       const cloud = await loadFromKV();
@@ -126,37 +105,6 @@ export default function App() {
     weight: 0,
     reps: 0,
   });
-  const [exerciseFilter, setExerciseFilter] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-
-  /* ---------------------------- Derived Values ---------------------------- */
-  const exercises = useMemo(
-    () => Array.from(new Set(store.sets.map((s) => s.exercise))).filter(Boolean),
-    [store.sets]
-  );
-
-  const filtered = useMemo(
-    () =>
-      store.sets
-        .filter((s) => (exerciseFilter ? s.exercise === exerciseFilter : true))
-        .filter((s) => (dateFrom ? s.date >= dateFrom : true))
-        .filter((s) => (dateTo ? s.date <= dateTo : true))
-        .sort((a, b) => a.date.localeCompare(b.date)),
-    [store.sets, exerciseFilter, dateFrom, dateTo]
-  );
-
-  const totals = useMemo(() => {
-    const t = filtered.reduce(
-      (acc, s) => {
-        acc.sets++;
-        acc.tonnage += setVolume(s.weight, s.reps);
-        return acc;
-      },
-      { sets: 0, tonnage: 0 }
-    );
-    return t;
-  }, [filtered]);
 
   /* -------------------------- High Score Board --------------------------- */
   type ExerciseStats = {
@@ -185,12 +133,11 @@ export default function App() {
     );
   }, [store.sets]);
 
-  // Track NEW highlights
+  // NEW highlight
   const prevMaxRef = useRef<Map<string, { weight: number; reps: number }>>(
     new Map()
   );
   const [updated, setUpdated] = useState<Record<string, number>>({});
-
   useEffect(() => {
     const now = Date.now();
     const next = { ...updated };
@@ -205,6 +152,7 @@ export default function App() {
     setUpdated(next);
   }, [highScores]);
 
+  // Expire NEW after 8s
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
@@ -239,10 +187,11 @@ export default function App() {
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 p-6">
       <div className="max-w-5xl mx-auto space-y-6">
-        <header className="flex flex-col gap-3">
+        {/* Header */}
+        <header className="flex flex-col gap-2">
           <h1 className="text-2xl font-semibold">Workout Tracker</h1>
           <p className="text-sm text-neutral-400">
-            Merge-safe Cloudflare KV Sync • Offline first
+            Merge-safe Cloudflare KV • Offline-first
           </p>
         </header>
 
@@ -325,14 +274,19 @@ export default function App() {
                         <span className="glow-new animate-float">NEW</span>
                       )}
                     </td>
-                    <td className="py-2 pr-3">{h.maxWeight} {store.units}</td>
+                    <td className="py-2 pr-3">
+                      {h.maxWeight} {store.units}
+                    </td>
                     <td className="py-2 pr-3">{h.maxReps}</td>
                   </tr>
                 );
               })}
               {!highScores.length && (
                 <tr>
-                  <td colSpan={3} className="py-4 text-center text-neutral-500">
+                  <td
+                    colSpan={3}
+                    className="py-4 text-center text-neutral-500"
+                  >
                     No data yet.
                   </td>
                 </tr>
@@ -355,7 +309,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s) => (
+              {store.sets.map((s) => (
                 <tr key={s.id} className="border-b border-neutral-900">
                   <td className="py-2 pr-3">{s.date}</td>
                   <td className="py-2 pr-3">{s.exercise}</td>
@@ -373,7 +327,7 @@ export default function App() {
                   </td>
                 </tr>
               ))}
-              {!filtered.length && (
+              {!store.sets.length && (
                 <tr>
                   <td
                     colSpan={5}
@@ -388,7 +342,7 @@ export default function App() {
         </section>
 
         <footer className="text-center text-xs text-neutral-500 py-4">
-          Merge-safe Cloudflare KV • Offline-first
+          Cloudflare KV Sync • Offline-first
         </footer>
       </div>
     </main>

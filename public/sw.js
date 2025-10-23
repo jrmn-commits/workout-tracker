@@ -1,8 +1,14 @@
-// sw.js
-const CACHE = "workout-v2"; // <-- bump
+// Progressive Web App Service Worker
+const CACHE = "workout-v3";
+
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/index.html"])));
+  e.waitUntil(
+    caches.open(CACHE).then((c) =>
+      c.addAll(["/", "/index.html", "/manifest.webmanifest"])
+    )
+  );
 });
+
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
@@ -11,6 +17,9 @@ self.addEventListener("activate", (e) => {
   );
   self.clients.claim();
 });
+
 self.addEventListener("fetch", (e) => {
-  e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
+  e.respondWith(
+    caches.match(e.request).then((r) => r || fetch(e.request))
+  );
 });
