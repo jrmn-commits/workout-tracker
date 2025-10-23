@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+
+    /* IMPORTANT: isolate the libs/types to Workers only */
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+
+    /* Safety net to avoid lib collisions from dependencies */
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "include": ["./**/*.ts"]
+}
