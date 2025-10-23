@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PlusCircle, Trash2 } from "lucide-react";
+import { PlusCircle } from "lucide-react";
 
 /* ---------------------------------- Types --------------------------------- */
 type Category = "push" | "pull" | "legs";
@@ -26,48 +26,9 @@ const STORAGE_KEY = "workout_tracker_v1";
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-// @ts-ignore – used indirectly throughout
+// @ts-ignore – used indirectly in calculations
 const setVolume = (w: number, r: number) =>
   Number.isFinite(w) && Number.isFinite(r) ? w * r : 0;
-
-const VALID_CATS: Category[] = ["push", "pull", "legs"];
-
-/* --------------------------- CSV parsing helpers -------------------------- */
-function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        const next = text[i + 1];
-        if (next === '"') {
-          cur += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else cur += ch;
-    } else {
-      if (ch === '"') inQuotes = true;
-      else if (ch === ",") {
-        row.push(cur.trim());
-        cur = "";
-      } else if (ch === "\n" || ch === "\r") {
-        if (ch === "\r" && text[i + 1] === "\n") i++;
-        row.push(cur.trim());
-        if (row.some((c) => c !== "")) rows.push(row);
-        row = [];
-        cur = "";
-      } else cur += ch;
-    }
-  }
-  row.push(cur.trim());
-  if (row.some((c) => c !== "")) rows.push(row);
-  return rows;
-}
 
 /* --------------------------- Cloudflare KV Sync --------------------------- */
 const KV_URL = import.meta.env.VITE_KV_ENDPOINT ?? "";
@@ -98,11 +59,13 @@ async function loadFromKV(): Promise<Store | null> {
 
 /* -------------------------------- Component ------------------------------- */
 export default function App() {
+  // Register service worker
   useEffect(() => {
     if ("serviceWorker" in navigator)
       navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
 
+  // Local + KV store
   const [store, setStore] = useState<Store>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -112,13 +75,12 @@ export default function App() {
     }
   });
 
-  // KV sync
   useEffect(() => {
     syncToKV(store);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   }, [store]);
 
-  // Attempt to load from KV once
+  // Attempt to load from KV if larger dataset exists
   useEffect(() => {
     (async () => {
       const remote = await loadFromKV();
@@ -155,6 +117,7 @@ export default function App() {
     return Array.from(byEx.values()).sort((a, b) => b.maxWeight - a.maxWeight);
   }, [store.sets]);
 
+  // “NEW” badge animation tracking
   const prevMaxRef = useRef<Map<string, number>>(new Map());
   const [rowUpdatedAt, setRowUpdatedAt] = useState<Record<string, number>>({});
 
@@ -171,6 +134,7 @@ export default function App() {
     setRowUpdatedAt(next);
   }, [highScores]);
 
+  // Auto-hide NEW badge after 8s
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
@@ -193,9 +157,6 @@ export default function App() {
     setStore((p) => ({ ...p, sets: [...p.sets, { ...form, id: uid() }] }));
     setForm((f) => ({ ...f, weight: 0, reps: 0, notes: "" }));
   }
-
-  const deleteSet = (id: string) =>
-    setStore((p) => ({ ...p, sets: p.sets.filter((s) => s.id !== id) }));
 
   /* -------------------------------- Render -------------------------------- */
   return (
