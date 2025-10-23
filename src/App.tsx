@@ -82,6 +82,7 @@ function parseCSV(text: string): string[][] {
   if (row.some((c) => c !== "")) rows.push(row);
   return rows;
 }
+
 const VALID_CATS: Category[] = ["push", "pull", "legs"];
 function rowsToSets(rows: string[][], targetUnits: Store["units"]) {
   const errors: string[] = [];
@@ -126,7 +127,6 @@ function rowsToSets(rows: string[][], targetUnits: Store["units"]) {
 
 /* -------------------------------- Component ------------------------------- */
 export default function App() {
-  // PWA registration
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
@@ -157,7 +157,6 @@ export default function App() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  /* ------------------------------- Derived -------------------------------- */
   const exercises = useMemo(
     () => Array.from(new Set(store.sets.map((s) => s.exercise))).filter(Boolean),
     [store.sets]
@@ -211,7 +210,6 @@ export default function App() {
     ];
   }, [filtered]);
 
-  // Recharts tooltip formatter (no unused params)
   const tonnageFormatter: TooltipProps<number, string>["formatter"] = (...args) => {
     const props = args[2] as any;
     return [`${props?.payload?.tonnage ?? 0} ${store.units}`, "Tonnage"];
@@ -220,29 +218,33 @@ export default function App() {
   /* ---------------------- High Score Board (per exercise) ------------------ */
   type ExerciseStats = {
     exercise: string;
-    maxWeight: number;   // best single-set weight
-    totalSets: number;   // total sets logged for that exercise
-    totalTonnage: number;// sum of weight*reps (not shown, but available)
+    maxWeight: number;
+    totalReps: number;
+    totalTonnage: number;
   };
 
   const highScores: ExerciseStats[] = useMemo(() => {
     const byEx = new Map<string, ExerciseStats>();
     for (const s of store.sets) {
-      const cur = byEx.get(s.exercise) ?? { exercise: s.exercise, maxWeight: 0, totalSets: 0, totalTonnage: 0 };
-      cur.totalSets += 1;
+      const cur =
+        byEx.get(s.exercise) ?? { exercise: s.exercise, maxWeight: 0, totalReps: 0, totalTonnage: 0 };
+      cur.totalReps += s.reps;
       cur.totalTonnage += setVolume(s.weight, s.reps);
       if (s.weight > cur.maxWeight) cur.maxWeight = s.weight;
       byEx.set(s.exercise, cur);
     }
     const arr = Array.from(byEx.values());
-    // Sort primarily by maxWeight desc, then by totalSets desc, then name
-    arr.sort((a, b) => (b.maxWeight - a.maxWeight) || (b.totalSets - a.totalSets) || a.exercise.localeCompare(b.exercise));
+    arr.sort(
+      (a, b) =>
+        b.maxWeight - a.maxWeight ||
+        b.totalReps - a.totalReps ||
+        a.exercise.localeCompare(b.exercise)
+    );
     return arr;
   }, [store.sets]);
 
-  // Track "NEW" badges per exercise when maxWeight increases
   const prevMaxRef = useRef<Map<string, number>>(new Map());
-  const [rowUpdatedAt, setRowUpdatedAt] = useState<Record<string, number>>({}); // exercise -> timestamp
+  const [rowUpdatedAt, setRowUpdatedAt] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const nextUpdated: Record<string, number> = { ...rowUpdatedAt };
@@ -254,7 +256,6 @@ export default function App() {
         prev.set(exercise, maxWeight);
       }
     }
-    // Clean out exercises removed from data
     for (const k of Array.from(prev.keys())) {
       if (!highScores.find((h) => h.exercise === k)) {
         prev.delete(k);
@@ -262,9 +263,8 @@ export default function App() {
       }
     }
     setRowUpdatedAt(nextUpdated);
-  }, [highScores]); // update when scores change
+  }, [highScores]);
 
-  // Auto-hide NEW after 8s
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
@@ -317,185 +317,30 @@ export default function App() {
     e.target.value = "";
   }
 
-  function importCSV(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result);
-      const { sets, errors } = rowsToSets(parseCSV(text), store.units);
-      if (sets.length) {
-        setStore((prev) => ({ ...prev, sets: [...prev.sets, ...sets] }));
-      }
-      if (errors.length) alert(`CSV warnings:\n- ${errors.join("\n- ")}`);
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  }
-
-  function exportCSV() {
-    const headers = ["date", "exercise", "category", "weight", "reps", "rpe", "notes", "units"];
-    const rows = store.sets.map((s) => [
-      s.date,
-      s.exercise,
-      s.category,
-      s.weight,
-      s.reps,
-      s.rpe ?? "",
-      s.notes ?? "",
-      store.units,
-    ]);
-    const csv = [headers, ...rows]
-      .map((r) =>
-        r
-          .map((v) => {
-            const val = String(v ?? "");
-            return /[",\n]/.test(val) ? `"${val.replace(/"/g, '""')}"` : val;
-          })
-          .join(",")
-      )
-      .join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "workouts.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  const printPage = () => window.print();
-
   /* ----------------------------- Render ----------------------------- */
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 p-6">
+      <style>{`
+        @keyframes floatNew {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-4px); }
+        }
+        .glow-new {
+          @apply inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 ring-2 ring-amber-400/50;
+          animation: floatNew 1.5s ease-in-out infinite;
+        }
+      `}</style>
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
-        <header className="flex flex-col gap-3">
-          <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Workout Tracker</h1>
-              <p className="text-sm text-neutral-400">Monthly training log • e1RM trend • PPL balance • Exports</p>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <button onClick={printPage} className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm" title="Print dashboard">
-                <Printer className="h-4 w-4" /> Print
-              </button>
-              <button onClick={exportCSV} className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm" title="Download CSV">
-                <Download className="h-4 w-4" /> CSV
-              </button>
-              <button onClick={exportJSON} className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm" title="Download JSON">
-                <Download className="h-4 w-4" /> JSON
-              </button>
-              <div>
-                <input id="jsonFile" type="file" accept="application/json" className="hidden" onChange={importJSON} />
-                <label htmlFor="jsonFile" className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm" title="Import workouts (JSON)">
-                  <Upload className="h-4 w-4" /> Import JSON
-                </label>
-              </div>
-              <div>
-                <input id="csvFile" type="file" accept=".csv,text/csv" className="hidden" onChange={importCSV} />
-                <label htmlFor="csvFile" className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm" title="Import workouts (CSV)">
-                  <Upload className="h-4 w-4" /> Import CSV
-                </label>
-              </div>
-            </div>
-          </div>
-
-          {/* Slim controls row */}
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="flex gap-2 items-center">
-              <span className="text-xs text-neutral-400">Units</span>
-              <select
-                className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
-                value={store.units}
-                onChange={(e) => setStore((s) => ({ ...s, units: e.target.value as Store["units"] }))}
-              >
-                <option value="lb">lb</option>
-                <option value="kg">kg</option>
-              </select>
-            </div>
-            <div className="flex gap-2">
-              <div>
-                <label className="block mb-1 text-neutral-300 text-xs">From</label>
-                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm" />
-              </div>
-              <div>
-                <label className="block mb-1 text-neutral-300 text-xs">To</label>
-                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm" />
-              </div>
-              <div>
-                <label className="block mb-1 text-neutral-300 text-xs">Exercise</label>
-                <select value={exerciseFilter} onChange={(e) => setExerciseFilter(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm min-w-48">
-                  <option value="">All exercises</option>
-                  {exercises.map((ex) => (
-                    <option key={ex} value={ex}>
-                      {ex}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        {/* Add Set */}
         <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
-          <h2 className="font-semibold">Add Set</h2>
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-            <div className="md:col-span-2">
-              <label className="block mb-1 text-neutral-300">Date</label>
-              <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-3">
-              <label className="block mb-1 text-neutral-300">Exercise</label>
-              <input placeholder="e.g., Bench Press" value={form.exercise} onChange={(e) => setForm({ ...form, exercise: e.target.value })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block mb-1 text-neutral-300">Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as Category })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2">
-                <option value="push">Push</option>
-                <option value="pull">Pull</option>
-                <option value="legs">Legs</option>
-              </select>
-            </div>
-            <div className="md:col-span-2">
-              <label className="block mb-1 text-neutral-300">Weight ({store.units})</label>
-              <input type="number" min={0} value={form.weight} onChange={(e) => setForm({ ...form, weight: Number(e.target.value) || 0 })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-1">
-              <label className="block mb-1 text-neutral-300">Reps</label>
-              <input type="number" min={1} value={form.reps} onChange={(e) => setForm({ ...form, reps: Number(e.target.value) || 0 })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block mb-1 text-neutral-300">RPE</label>
-              <input type="number" step={0.5} min={5} max={10} value={form.rpe ?? ""} onChange={(e) => setForm({ ...form, rpe: e.target.value === "" ? undefined : Number(e.target.value) })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-12">
-              <label className="block mb-1 text-neutral-300">Notes</label>
-              <input placeholder="tempo, cues, pain, etc." value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <button onClick={addSet} className="inline-flex items-center px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white">
-              <PlusCircle className="h-4 w-4 mr-2" /> Add Set
-            </button>
-          </div>
-        </section>
-
-        {/* High Score Board */}
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold">High Score Board — per exercise</h2>
-            <span className="text-xs text-neutral-400">Highest weight • Sets moved</span>
-          </div>
+          <h2 className="font-semibold">High Score Board — per exercise</h2>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-neutral-400">
                 <tr className="text-left border-b border-neutral-800">
                   <th className="py-2 pr-3">Exercise</th>
                   <th className="py-2 pr-3">Highest weight</th>
-                  <th className="py-2 pr-3">Sets moved</th>
+                  <th className="py-2 pr-3">Reps moved</th>
+                  <th className="py-2 pr-3">Total tonnage</th>
                 </tr>
               </thead>
               <tbody>
@@ -513,13 +358,16 @@ export default function App() {
                         <td className="py-2 pr-3">
                           {row.maxWeight ? `${row.maxWeight} ${store.units}` : "-"}
                         </td>
-                        <td className="py-2 pr-3">{row.totalSets}</td>
+                        <td className="py-2 pr-3">{row.totalReps}</td>
+                        <td className="py-2 pr-3">
+                          {Math.round(row.totalTonnage)} {store.units}
+                        </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={3} className="py-6 text-center text-neutral-500">
+                    <td colSpan={4} className="py-6 text-center text-neutral-500">
                       No data yet — add your first set above.
                     </td>
                   </tr>
@@ -528,125 +376,6 @@ export default function App() {
             </table>
           </div>
         </section>
-
-        {/* Filters + Totals */}
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-4">
-              <label className="block mb-1 text-neutral-300">Exercise filter</label>
-              <select className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" value={exerciseFilter} onChange={(e) => setExerciseFilter(e.target.value)}>
-                <option value="">All exercises</option>
-                {exercises.map((ex) => (
-                  <option key={ex} value={ex}>
-                    {ex}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="md:col-span-3">
-              <label className="block mb-1 text-neutral-300">From</label>
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-3">
-              <label className="block mb-1 text-neutral-300">To</label>
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2" />
-            </div>
-            <div className="md:col-span-2">
-              <div className="text-sm text-neutral-400">Totals</div>
-              <div className="text-xs text-neutral-500">
-                Sets: <span className="text-neutral-200">{totals.sets}</span> • Tonnage:{" "}
-                <span className="text-neutral-200">{Math.round(totals.tonnage)} {store.units}</span>{" "}
-                • Avg RPE: <span className="text-neutral-200">{totals.avgRPE ? totals.avgRPE.toFixed(1) : "-"}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Charts */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Progress chart */}
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
-            <h2 className="font-semibold">Progress — Best e1RM per Day{exerciseFilter ? ` (${exerciseFilter})` : ""}</h2>
-            <div className="h-[320px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Line type="monotone" dataKey="e1RM" stroke="#60a5fa" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-            {!exerciseFilter && <p className="text-xs text-neutral-500">Tip: choose an exercise to see its e1RM trend.</p>}
-          </div>
-
-          {/* Wheel: Push / Pull / Legs */}
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
-            <h2 className="font-semibold">Push / Pull / Legs — Balance Wheel</h2>
-            <p className="text-xs text-neutral-500">Each spoke shows relative tonnage (scaled 0–10). Hover for exact tonnage in {store.units}.</p>
-            <div className="h-[320px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={wheelData} outerRadius={110}>
-                  <PolarGrid />
-                  <PolarAngleAxis dataKey="cat" tick={{ fill: "#d4d4d8", fontSize: 12 }} />
-                  <PolarRadiusAxis angle={90} domain={[0, 10]} tick={{ fill: "#a1a1aa", fontSize: 10 }} />
-                  <Tooltip formatter={tonnageFormatter} labelFormatter={(label: string) => String(label)} />
-                  <Radar name="Balance" dataKey="score" stroke="#34d399" fill="#34d399" fillOpacity={0.4} />
-                </RadarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </section>
-
-        {/* Table */}
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="text-neutral-400">
-                <tr className="text-left border-b border-neutral-800">
-                  <th className="py-2 pr-3">Date</th>
-                  <th className="py-2 pr-3">Exercise</th>
-                  <th className="py-2 pr-3">Category</th>
-                  <th className="py-2 pr-3">Weight</th>
-                  <th className="py-2 pr-3">Reps</th>
-                  <th className="py-2 pr-3">RPE</th>
-                  <th className="py-2 pr-3">e1RM</th>
-                  <th className="py-2 pr-3">Notes</th>
-                  <th className="py-2 pr-3"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((s) => (
-                  <tr key={s.id} className="border-b border-neutral-900">
-                    <td className="py-2 pr-3">{s.date}</td>
-                    <td className="py-2 pr-3">{s.exercise}</td>
-                    <td className="py-2 pr-3 capitalize">{s.category}</td>
-                    <td className="py-2 pr-3">{s.weight} {store.units}</td>
-                    <td className="py-2 pr-3">{s.reps}</td>
-                    <td className="py-2 pr-3">{s.rpe ?? "-"}</td>
-                    <td className="py-2 pr-3">{e1rm(s.weight, s.reps).toFixed(1)}</td>
-                    <td className="py-2 pr-3">{s.notes}</td>
-                    <td className="py-2 pr-3">
-                      <button className="inline-flex items-center px-2 py-1 rounded-md bg-red-600/80 hover:bg-red-600 text-white" onClick={() => deleteSet(s.id)} title="Delete set">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!filtered.length && (
-                  <tr>
-                    <td colSpan={9} className="py-6 text-center text-neutral-500">No sets yet — add your first set above.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <footer className="text-center text-xs text-neutral-500 py-4">
-          Offline-first • Data stored locally • Export/Import anytime
-        </footer>
       </div>
     </main>
   );
