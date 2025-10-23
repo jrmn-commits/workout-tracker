@@ -1,0 +1,11 @@
+name = "workout-tracker"
+compatibility_date = "2025-10-23"
+
+# Optional: enables Node APIs in your Pages Functions
+compatibility_flags = ["nodejs_compat"]
+
+# Bindings for Pages Functions (used inside /functions/*.js)
+[[kv_namespaces]]
+binding = "WORKOUT_KV"
+id = "773c501fed214f60b34a0c4007eed3f5"
+# preview_id = "PASTE_PREVIEW_ID_IF_YOU_CREATED_ONE"
