@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Download, Upload, PlusCircle, Trash2 } from "lucide-react";
+import type { TooltipProps } from "recharts";
 import {
   LineChart,
   Line,
@@ -148,6 +149,15 @@ export default function App() {
       { cat: "Legs", score: scale(wheelRaw.legs), tonnage: Math.round(wheelRaw.legs) },
     ];
   }, [wheelRaw]);
+
+  /* -------------------------- Tooltip Formatter --------------------------- */
+  const tonnageFormatter: NonNullable<TooltipProps<number, string>["formatter"]> =
+    (...args) => {
+      // Recharts passes: (value, name, props)
+      const props = args[2] as any;
+      const tonnage = props?.payload?.tonnage ?? 0;
+      return [`${tonnage} ${store.units}`, "Tonnage"];
+    };
 
   /* ------------------------------- Actions -------------------------------- */
   function addSet() {
@@ -399,11 +409,8 @@ export default function App() {
                   <PolarAngleAxis dataKey="cat" tick={{ fill: "#d4d4d8", fontSize: 12 }} />
                   <PolarRadiusAxis angle={90} domain={[0, 10]} tick={{ fill: "#a1a1aa", fontSize: 10 }} />
                   <Tooltip
-                    formatter={(_, name, props: any) => {
-                      // show tonnage in tooltip
-                      return [`${props.payload.tonnage} ${store.units}`, "Tonnage"];
-                    }}
-                    labelFormatter={(label) => `${label}`}
+                    formatter={tonnageFormatter}
+                    labelFormatter={(label: string) => String(label)}
                   />
                   <Radar name="Balance" dataKey="score" stroke="#34d399" fill="#34d399" fillOpacity={0.4} />
                 </RadarChart>
