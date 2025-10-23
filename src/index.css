@@ -30,3 +30,24 @@
            bg-amber-500/15 text-amber-300 ring-2 ring-amber-400/50 animate-pulse;
   }
 }
+
+.glow-new {
+  background: linear-gradient(90deg, #60a5fa, #34d399);
+  color: black;
+  font-weight: 700;
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.4rem;
+  animation: glow 1.5s infinite alternate;
+}
+@keyframes glow {
+  from { opacity: 0.7; transform: translateY(0px); }
+  to { opacity: 1; transform: translateY(-2px); }
+}
+.animate-float {
+  animation: float 1.5s ease-in-out infinite alternate;
+}
+@keyframes float {
+  from { transform: translateY(0px); }
+  to { transform: translateY(-3px); }
+}
