@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Download, Upload, PlusCircle, Trash2 } from "lucide-react";
+import { Download, Upload, PlusCircle, Trash2, Printer } from "lucide-react";
 import type { TooltipProps } from "recharts";
 import {
   LineChart,
@@ -40,31 +40,25 @@ const STORAGE_KEY = "workout_tracker_v1";
 /* --------------------------------- Utils ---------------------------------- */
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => Math.random().toString(36).slice(2, 9);
-
-/** Epley e1RM: weight * (1 + reps/30) */
+const setVolume = (w: number, r: number) => (Number.isFinite(w) && Number.isFinite(r) ? w * r : 0);
 function e1rm(weight: number, reps: number) {
   if (!weight || !reps) return 0;
   return weight * (1 + reps / 30);
 }
 
-/** Tonnage for a set */
-const setVolume = (w: number, r: number) => (Number.isFinite(w) && Number.isFinite(r) ? w * r : 0);
-
-/* --------------------------- CSV parsing helpers -------------------------- */
-/** Tiny CSV → rows parser (handles quotes and escaped quotes) */
+/* --------------------------- CSV helpers ---------------------------------- */
 function parseCSV(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cur = "";
   let inQuotes = false;
-
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (inQuotes) {
       if (ch === '"') {
         const next = text[i + 1];
         if (next === '"') {
-          cur += '"'; // escaped quote
+          cur += '"';
           i++;
         } else {
           inQuotes = false;
@@ -73,16 +67,14 @@ function parseCSV(text: string): string[][] {
         cur += ch;
       }
     } else {
-      if (ch === '"') {
-        inQuotes = true;
-      } else if (ch === ",") {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ",") {
         row.push(cur.trim());
         cur = "";
       } else if (ch === "\n" || ch === "\r") {
-        // finish row on newline; handle \r\n
         if (ch === "\r" && text[i + 1] === "\n") i++;
         row.push(cur.trim());
-        if (row.length && row.some((c) => c !== "")) rows.push(row);
+        if (row.some((c) => c !== "")) rows.push(row);
         row = [];
         cur = "";
       } else {
@@ -90,95 +82,50 @@ function parseCSV(text: string): string[][] {
       }
     }
   }
-  // last cell
   row.push(cur.trim());
-  if (row.length && row.some((c) => c !== "")) rows.push(row);
+  if (row.some((c) => c !== "")) rows.push(row);
   return rows;
 }
-
-function normalizeHeader(h: string) {
-  return h.trim().toLowerCase();
-}
-
 const VALID_CATS: Category[] = ["push", "pull", "legs"];
-
-/** Map CSV rows → SetEntry[], with validation + (optional) unit conversion */
-function rowsToSets(
-  rows: string[][],
-  targetUnits: Store["units"]
-): { sets: SetEntry[]; errors: string[] } {
+function rowsToSets(rows: string[][], targetUnits: Store["units"]) {
   const errors: string[] = [];
   if (!rows.length) return { sets: [], errors: ["CSV is empty"] };
-
-  const header = rows[0].map(normalizeHeader);
+  const header = rows[0].map((h) => h.trim().toLowerCase());
   const idx = (k: string) => header.indexOf(k);
+  const dateI = idx("date"),
+    exI = idx("exercise"),
+    catI = idx("category"),
+    wI = idx("weight"),
+    rI = idx("reps"),
+    rpeI = idx("rpe"),
+    notesI = idx("notes"),
+    unitsI = idx("units");
 
-  const dateI = idx("date");
-  const exerciseI = idx("exercise");
-  const categoryI = idx("category");
-  const weightI = idx("weight");
-  const repsI = idx("reps");
-  const rpeI = idx("rpe");
-  const notesI = idx("notes");
-  const unitsI = idx("units"); // optional per-row override
-
-  const missing: string[] = [];
-  if (dateI < 0) missing.push("date");
-  if (exerciseI < 0) missing.push("exercise");
-  if (categoryI < 0) missing.push("category");
-  if (weightI < 0) missing.push("weight");
-  if (repsI < 0) missing.push("reps");
-  if (missing.length) {
-    return { sets: [], errors: [`Missing column(s): ${missing.join(", ")}`] };
-  }
+  const missing = [dateI, exI, catI, wI, rI].some((i) => i < 0);
+  if (missing) return { sets: [], errors: ["Missing required columns: date, exercise, category, weight, reps"] };
 
   const out: SetEntry[] = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-
     const date = row[dateI]?.trim();
-    const exercise = row[exerciseI]?.trim();
-    const category = row[categoryI]?.trim().toLowerCase() as Category;
-    const weightRaw = row[weightI]?.trim();
-    const repsRaw = row[repsI]?.trim();
-    const rpeRaw = rpeI >= 0 ? row[rpeI]?.trim() : "";
+    const exercise = row[exI]?.trim();
+    const category = row[catI]?.trim().toLowerCase() as Category;
+    const weightNum = Number(row[wI]);
+    const repsNum = Number(row[rI]);
+    const rpe = rpeI >= 0 && row[rpeI] ? Number(row[rpeI]) : undefined;
     const notes = notesI >= 0 ? row[notesI] ?? "" : "";
     const csvUnits = (unitsI >= 0 ? row[unitsI] : "").trim().toLowerCase() as "lb" | "kg" | "";
 
-    // Required
-    if (!date || !exercise || !category || !weightRaw || !repsRaw) {
-      errors.push(`Row ${r + 1}: missing required values`);
-      continue;
-    }
-    // Category
-    if (!VALID_CATS.includes(category)) {
-      errors.push(`Row ${r + 1}: invalid category "${row[categoryI]}"`);
-      continue;
-    }
-    // Date format
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      errors.push(`Row ${r + 1}: invalid date "${date}" (expected YYYY-MM-DD)`);
+    if (!date || !exercise || !VALID_CATS.includes(category) || !Number.isFinite(weightNum) || !Number.isFinite(repsNum)) {
+      errors.push(`Row ${r + 1}: invalid or missing values`);
       continue;
     }
 
-    let weight = Number(weightRaw);
-    const reps = Number(repsRaw);
-    const rpe = rpeRaw === "" ? undefined : Number(rpeRaw);
-    if (!Number.isFinite(weight) || !Number.isFinite(reps)) {
-      errors.push(`Row ${r + 1}: non-numeric weight/reps`);
-      continue;
-    }
-    if (rpeRaw !== "" && !Number.isFinite(rpe as number)) {
-      errors.push(`Row ${r + 1}: non-numeric RPE`);
-      continue;
-    }
-
-    // Unit conversion if CSV units differ from targetUnits
-    const rowUnits = csvUnits === "lb" || csvUnits === "kg" ? csvUnits : targetUnits;
+    let weight = weightNum;
+    const rowUnits = csvUnits || targetUnits;
     if (rowUnits !== targetUnits) {
-      if (rowUnits === "kg" && targetUnits === "lb") weight = weight * 2.2046226218;
-      if (rowUnits === "lb" && targetUnits === "kg") weight = weight / 2.2046226218;
-      weight = Number(weight.toFixed(2));
+      if (rowUnits === "kg" && targetUnits === "lb") weight *= 2.2046226218;
+      if (rowUnits === "lb" && targetUnits === "kg") weight /= 2.2046226218;
     }
 
     out.push({
@@ -186,23 +133,20 @@ function rowsToSets(
       date,
       exercise,
       category,
-      weight,
-      reps,
+      weight: Number(weight.toFixed(2)),
+      reps: repsNum,
       rpe,
       notes,
     });
   }
-
   return { sets: out, errors };
 }
 
-/* ------------------------------- Component -------------------------------- */
+/* -------------------------------- Component ------------------------------- */
 export default function App() {
-  // PWA: register service worker if present
+  // PWA registration
   useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
-    }
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
 
   // Local store
@@ -231,23 +175,25 @@ export default function App() {
   });
 
   // Filters
-  const [exerciseFilter, setExerciseFilter] = useState<string>("");
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const [exerciseFilter, setExerciseFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   // Derived
-  const exercises = useMemo(() => {
-    const set = new Set(store.sets.map((s) => s.exercise).filter(Boolean));
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [store.sets]);
+  const exercises = useMemo(
+    () => Array.from(new Set(store.sets.map((s) => s.exercise))).filter(Boolean),
+    [store.sets]
+  );
 
-  const filtered = useMemo(() => {
-    return store.sets
-      .filter((s) => (exerciseFilter ? s.exercise === exerciseFilter : true))
-      .filter((s) => (dateFrom ? s.date >= dateFrom : true))
-      .filter((s) => (dateTo ? s.date <= dateTo : true))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [store.sets, exerciseFilter, dateFrom, dateTo]);
+  const filtered = useMemo(
+    () =>
+      store.sets
+        .filter((s) => (exerciseFilter ? s.exercise === exerciseFilter : true))
+        .filter((s) => (dateFrom ? s.date >= dateFrom : true))
+        .filter((s) => (dateTo ? s.date <= dateTo : true))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+    [store.sets, exerciseFilter, dateFrom, dateTo]
+  );
 
   const totals = useMemo(() => {
     const t = filtered.reduce(
@@ -259,63 +205,48 @@ export default function App() {
       },
       { sets: 0, tonnage: 0, avgRPE: 0 }
     );
-    if (t.sets) t.avgRPE = t.avgRPE / t.sets;
+    if (t.sets) t.avgRPE /= t.sets;
     return t;
   }, [filtered]);
 
-  // Chart: best e1RM per date for selected exercise
   const chartData = useMemo(() => {
     if (!exerciseFilter) return [];
-    const byDate = new Map<string, number>();
+    const bestByDate = new Map<string, number>();
     for (const s of filtered.filter((x) => x.exercise === exerciseFilter)) {
       const est = e1rm(s.weight, s.reps);
-      const cur = byDate.get(s.date) ?? 0;
-      if (est > cur) byDate.set(s.date, est);
+      bestByDate.set(s.date, Math.max(bestByDate.get(s.date) ?? 0, est));
     }
-    return Array.from(byDate.entries())
-      .map(([date, value]) => ({ date, e1RM: Number(value.toFixed(1)) }))
+    return Array.from(bestByDate.entries())
+      .map(([date, e1RM]) => ({ date, e1RM: Number(e1RM.toFixed(1)) }))
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [filtered, exerciseFilter]);
 
-  // Wheel: category balance (tonnage per category, scaled 0–10)
-  const wheelRaw = useMemo(() => {
-    const sums: Record<Category, number> = { push: 0, pull: 0, legs: 0 };
-    for (const s of filtered) {
-      sums[s.category] += setVolume(s.weight, s.reps);
-    }
-    return sums;
-  }, [filtered]);
-
   const wheelData = useMemo(() => {
-    const max = Math.max(1, wheelRaw.push, wheelRaw.pull, wheelRaw.legs);
+    const sums: Record<Category, number> = { push: 0, pull: 0, legs: 0 };
+    for (const s of filtered) sums[s.category] += setVolume(s.weight, s.reps);
+    const max = Math.max(1, sums.push, sums.pull, sums.legs);
     const scale = (v: number) => Number(((v / max) * 10).toFixed(2));
     return [
-      { cat: "Push", score: scale(wheelRaw.push), tonnage: Math.round(wheelRaw.push) },
-      { cat: "Pull", score: scale(wheelRaw.pull), tonnage: Math.round(wheelRaw.pull) },
-      { cat: "Legs", score: scale(wheelRaw.legs), tonnage: Math.round(wheelRaw.legs) },
+      { cat: "Push", score: scale(sums.push), tonnage: Math.round(sums.push) },
+      { cat: "Pull", score: scale(sums.pull), tonnage: Math.round(sums.pull) },
+      { cat: "Legs", score: scale(sums.legs), tonnage: Math.round(sums.legs) },
     ];
-  }, [wheelRaw]);
+  }, [filtered]);
 
-  /* -------------------------- Tooltip Formatter --------------------------- */
-  const tonnageFormatter: NonNullable<TooltipProps<number, string>["formatter"]> =
-    (...args) => {
-      // Recharts passes: (value, name, props)
-      const props = args[2] as any;
-      const tonnage = props?.payload?.tonnage ?? 0;
-      return [`${tonnage} ${store.units}`, "Tonnage"];
-    };
+  // Recharts tooltip formatter (no unused params)
+  const tonnageFormatter: TooltipProps<number, string>["formatter"] = (...args) => {
+    const props = args[2] as any;
+    return [`${props?.payload?.tonnage ?? 0} ${store.units}`, "Tonnage"];
+  };
 
-  /* ------------------------------- Actions -------------------------------- */
+  /* -------------------------------- Actions -------------------------------- */
   function addSet() {
-    if (!form.exercise || !form.date || !form.reps || !form.weight) return;
-    const entry: SetEntry = { ...form, id: uid() };
-    setStore((prev) => ({ ...prev, sets: [...prev.sets, entry] }));
+    if (!form.exercise || !form.weight || !form.reps) return;
+    setStore((p) => ({ ...p, sets: [...p.sets, { ...form, id: uid() }] }));
     setForm((f) => ({ ...f, weight: 0, reps: 0, rpe: undefined, notes: "" }));
   }
-
-  function deleteSet(id: string) {
-    setStore((prev) => ({ ...prev, sets: prev.sets.filter((s) => s.id !== id) }));
-  }
+  const deleteSet = (id: string) =>
+    setStore((p) => ({ ...p, sets: p.sets.filter((s) => s.id !== id) }));
 
   function exportJSON() {
     const blob = new Blob([JSON.stringify(store, null, 2)], { type: "application/json" });
@@ -349,110 +280,177 @@ export default function App() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      try {
-        const text = String(reader.result);
-        const rows = parseCSV(text);
-        const { sets, errors } = rowsToSets(rows, store.units);
-        if (!sets.length) {
-          alert(`CSV import failed:\n- ${errors.join("\n- ")}`);
-        } else {
-          setStore((prev) => ({ ...prev, sets: [...prev.sets, ...sets] }));
-          if (errors.length) {
-            alert(`Imported ${sets.length} sets with warnings:\n- ${errors.join("\n- ")}`);
-          }
-        }
-      } catch (err) {
-        alert(`CSV import failed: ${err}`);
+      const text = String(reader.result);
+      const { sets, errors } = rowsToSets(parseCSV(text), store.units);
+      if (sets.length) {
+        setStore((prev) => ({ ...prev, sets: [...prev.sets, ...sets] }));
       }
+      if (errors.length) alert(`CSV warnings:\n- ${errors.join("\n- ")}`);
     };
     reader.readAsText(file);
     e.target.value = "";
   }
 
-  function downloadCsvTemplate() {
-    const example = [
-      ["date", "exercise", "category", "weight", "reps", "rpe", "notes", "units"],
-      ["2025-10-10", "Barbell Squat", "legs", "135", "8", "7.5", "paused last 2", "lb"],
-    ]
-      .map((r) => r.join(","))
+  function exportCSV() {
+    const headers = ["date", "exercise", "category", "weight", "reps", "rpe", "notes", "units"];
+    const rows = store.sets.map((s) => [
+      s.date,
+      s.exercise,
+      s.category,
+      s.weight,
+      s.reps,
+      s.rpe ?? "",
+      s.notes ?? "",
+      store.units,
+    ]);
+    const csv = [headers, ...rows]
+      .map((r) =>
+        r
+          .map((v) => {
+            const val = String(v ?? "");
+            return /[",\n]/.test(val) ? `"${val.replace(/"/g, '""')}"` : val;
+          })
+          .join(",")
+      )
       .join("\n");
-
-    const url = URL.createObjectURL(new Blob([example], { type: "text/csv" }));
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "workout-template.csv";
+    a.download = "workouts.csv";
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  const printPage = () => window.print();
 
   /* -------------------------------- Render -------------------------------- */
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 p-6">
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
-        <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Workout Tracker</h1>
-            <p className="text-sm text-neutral-400">Log sets • Track e1RM • Monitor tonnage & RPE</p>
+        {/* Header with action bar */}
+        <header className="flex flex-col gap-3">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Workout Tracker</h1>
+              <p className="text-sm text-neutral-400">
+                Monthly training log • e1RM trend • PPL balance • Exports
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={printPage}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm"
+                title="Print dashboard"
+              >
+                <Printer className="h-4 w-4" /> Print
+              </button>
+              <button
+                onClick={exportCSV}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm"
+                title="Download CSV"
+              >
+                <Download className="h-4 w-4" /> CSV
+              </button>
+              <button
+                onClick={exportJSON}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm"
+                title="Download JSON"
+              >
+                <Download className="h-4 w-4" /> JSON
+              </button>
+
+              <div>
+                <input
+                  id="jsonFile"
+                  type="file"
+                  accept="application/json"
+                  className="hidden"
+                  onChange={importJSON}
+                />
+                <label
+                  htmlFor="jsonFile"
+                  className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm"
+                  title="Import workouts (JSON)"
+                >
+                  <Upload className="h-4 w-4" /> Import JSON
+                </label>
+              </div>
+
+              <div>
+                <input
+                  id="csvFile"
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={importCSV}
+                />
+                <label
+                  htmlFor="csvFile"
+                  className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-sm"
+                  title="Import workouts (CSV)"
+                >
+                  <Upload className="h-4 w-4" /> Import CSV
+                </label>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+
+          {/* Slim controls row */}
+          <div className="flex flex-wrap gap-3 items-end">
             <div className="flex gap-2 items-center">
               <span className="text-xs text-neutral-400">Units</span>
               <select
                 className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
                 value={store.units}
-                onChange={(e) => setStore((s) => ({ ...s, units: e.target.value as Store["units"] }))}
+                onChange={(e) =>
+                  setStore((s) => ({ ...s, units: e.target.value as Store["units"] }))
+                }
               >
                 <option value="lb">lb</option>
                 <option value="kg">kg</option>
               </select>
             </div>
-
-            {/* Export JSON */}
-            <button
-              onClick={exportJSON}
-              className="inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
-            >
-              <Download className="h-4 w-4 mr-2" /> Export
-            </button>
-
-            {/* Import JSON */}
-            <div>
-              <input id="jsonFile" type="file" accept="application/json" className="hidden" onChange={importJSON} />
-              <label
-                htmlFor="jsonFile"
-                className="cursor-pointer inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
-                title="Import workouts from JSON"
-              >
-                <Upload className="h-4 w-4 mr-2" /> Import JSON
-              </label>
+            <div className="flex gap-2">
+              <div>
+                <label className="block mb-1 text-neutral-300 text-xs">From</label>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block mb-1 text-neutral-300 text-xs">To</label>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block mb-1 text-neutral-300 text-xs">Exercise</label>
+                <select
+                  value={exerciseFilter}
+                  onChange={(e) => setExerciseFilter(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm min-w-48"
+                >
+                  <option value="">All exercises</option>
+                  {exercises.map((ex) => (
+                    <option key={ex} value={ex}>
+                      {ex}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-
-            {/* Import CSV */}
-            <div>
-              <input id="csvFile" type="file" accept=".csv,text/csv" className="hidden" onChange={importCSV} />
-              <label
-                htmlFor="csvFile"
-                className="cursor-pointer inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
-                title="Import workouts from CSV"
-              >
-                <Upload className="h-4 w-4 mr-2" /> Import CSV
-              </label>
-            </div>
-
-            {/* CSV Template */}
-            <button
-              onClick={downloadCsvTemplate}
-              className="inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
-              title="Download CSV template"
-            >
-              <Download className="h-4 w-4 mr-2" /> CSV Template
-            </button>
           </div>
         </header>
 
         {/* Add Set */}
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4 space-y-3">
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
           <h2 className="font-semibold">Add Set</h2>
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
             <div className="md:col-span-2">
@@ -486,12 +484,16 @@ export default function App() {
               </select>
             </div>
             <div className="md:col-span-2">
-              <label className="block mb-1 text-neutral-300">Weight ({store.units})</label>
+              <label className="block mb-1 text-neutral-300">
+                Weight ({store.units})
+              </label>
               <input
                 type="number"
                 min={0}
                 value={form.weight}
-                onChange={(e) => setForm({ ...form, weight: Number(e.target.value) || 0 })}
+                onChange={(e) =>
+                  setForm({ ...form, weight: Number(e.target.value) || 0 })
+                }
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2"
               />
             </div>
@@ -501,7 +503,9 @@ export default function App() {
                 type="number"
                 min={1}
                 value={form.reps}
-                onChange={(e) => setForm({ ...form, reps: Number(e.target.value) || 0 })}
+                onChange={(e) =>
+                  setForm({ ...form, reps: Number(e.target.value) || 0 })
+                }
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2"
               />
             </div>
@@ -513,7 +517,12 @@ export default function App() {
                 min={5}
                 max={10}
                 value={form.rpe ?? ""}
-                onChange={(e) => setForm({ ...form, rpe: e.target.value === "" ? undefined : Number(e.target.value) })}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    rpe: e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
                 className="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-2"
               />
             </div>
@@ -538,7 +547,7 @@ export default function App() {
         </section>
 
         {/* Filters + Totals */}
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4 space-y-3">
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-4">
               <label className="block mb-1 text-neutral-300">Exercise filter</label>
@@ -580,16 +589,19 @@ export default function App() {
                 <span className="text-neutral-200">
                   {Math.round(totals.tonnage)} {store.units}
                 </span>{" "}
-                • Avg RPE: <span className="text-neutral-200">{totals.avgRPE ? totals.avgRPE.toFixed(1) : "-"}</span>
+                • Avg RPE:{" "}
+                <span className="text-neutral-200">
+                  {totals.avgRPE ? totals.avgRPE.toFixed(1) : "-"}
+                </span>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Charts: e1RM progress + PPL Wheel */}
+        {/* Charts */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Progress chart */}
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4 space-y-3">
+          {/* e1RM Progress */}
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
             <h2 className="font-semibold">
               Progress — Best e1RM per Day{exerciseFilter ? ` (${exerciseFilter})` : ""}
             </h2>
@@ -605,12 +617,14 @@ export default function App() {
               </ResponsiveContainer>
             </div>
             {!exerciseFilter && (
-              <p className="text-xs text-neutral-500">Tip: choose an exercise to see its e1RM trend.</p>
+              <p className="text-xs text-neutral-500">
+                Tip: choose an exercise to see its e1RM trend.
+              </p>
             )}
           </div>
 
-          {/* Wheel: Push / Pull / Legs */}
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4 space-y-3">
+          {/* Wheel */}
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5 space-y-3">
             <h2 className="font-semibold">Push / Pull / Legs — Balance Wheel</h2>
             <p className="text-xs text-neutral-500">
               Each spoke shows relative tonnage (scaled 0–10). Hover for exact tonnage in {store.units}.
@@ -621,7 +635,7 @@ export default function App() {
                   <PolarGrid />
                   <PolarAngleAxis dataKey="cat" tick={{ fill: "#d4d4d8", fontSize: 12 }} />
                   <PolarRadiusAxis angle={90} domain={[0, 10]} tick={{ fill: "#a1a1aa", fontSize: 10 }} />
-                  <Tooltip formatter={tonnageFormatter} labelFormatter={(label: string) => String(label)} />
+                  <Tooltip formatter={tonnageFormatter} labelFormatter={(l: string) => String(l)} />
                   <Radar name="Balance" dataKey="score" stroke="#34d399" fill="#34d399" fillOpacity={0.4} />
                 </RadarChart>
               </ResponsiveContainer>
@@ -630,7 +644,7 @@ export default function App() {
         </section>
 
         {/* Table */}
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-5">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-neutral-400">
