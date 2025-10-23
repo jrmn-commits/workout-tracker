@@ -50,6 +50,152 @@ function e1rm(weight: number, reps: number) {
 /** Tonnage for a set */
 const setVolume = (w: number, r: number) => (Number.isFinite(w) && Number.isFinite(r) ? w * r : 0);
 
+/* --------------------------- CSV parsing helpers -------------------------- */
+/** Tiny CSV → rows parser (handles quotes and escaped quotes) */
+function parseCSV(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        const next = text[i + 1];
+        if (next === '"') {
+          cur += '"'; // escaped quote
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ",") {
+        row.push(cur.trim());
+        cur = "";
+      } else if (ch === "\n" || ch === "\r") {
+        // finish row on newline; handle \r\n
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cur.trim());
+        if (row.length && row.some((c) => c !== "")) rows.push(row);
+        row = [];
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+  }
+  // last cell
+  row.push(cur.trim());
+  if (row.length && row.some((c) => c !== "")) rows.push(row);
+  return rows;
+}
+
+function normalizeHeader(h: string) {
+  return h.trim().toLowerCase();
+}
+
+const VALID_CATS: Category[] = ["push", "pull", "legs"];
+
+/** Map CSV rows → SetEntry[], with validation + (optional) unit conversion */
+function rowsToSets(
+  rows: string[][],
+  targetUnits: Store["units"]
+): { sets: SetEntry[]; errors: string[] } {
+  const errors: string[] = [];
+  if (!rows.length) return { sets: [], errors: ["CSV is empty"] };
+
+  const header = rows[0].map(normalizeHeader);
+  const idx = (k: string) => header.indexOf(k);
+
+  const dateI = idx("date");
+  const exerciseI = idx("exercise");
+  const categoryI = idx("category");
+  const weightI = idx("weight");
+  const repsI = idx("reps");
+  const rpeI = idx("rpe");
+  const notesI = idx("notes");
+  const unitsI = idx("units"); // optional per-row override
+
+  const missing: string[] = [];
+  if (dateI < 0) missing.push("date");
+  if (exerciseI < 0) missing.push("exercise");
+  if (categoryI < 0) missing.push("category");
+  if (weightI < 0) missing.push("weight");
+  if (repsI < 0) missing.push("reps");
+  if (missing.length) {
+    return { sets: [], errors: [`Missing column(s): ${missing.join(", ")}`] };
+  }
+
+  const out: SetEntry[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+
+    const date = row[dateI]?.trim();
+    const exercise = row[exerciseI]?.trim();
+    const category = row[categoryI]?.trim().toLowerCase() as Category;
+    const weightRaw = row[weightI]?.trim();
+    const repsRaw = row[repsI]?.trim();
+    const rpeRaw = rpeI >= 0 ? row[rpeI]?.trim() : "";
+    const notes = notesI >= 0 ? row[notesI] ?? "" : "";
+    const csvUnits = (unitsI >= 0 ? row[unitsI] : "").trim().toLowerCase() as "lb" | "kg" | "";
+
+    // Required
+    if (!date || !exercise || !category || !weightRaw || !repsRaw) {
+      errors.push(`Row ${r + 1}: missing required values`);
+      continue;
+    }
+    // Category
+    if (!VALID_CATS.includes(category)) {
+      errors.push(`Row ${r + 1}: invalid category "${row[categoryI]}"`);
+      continue;
+    }
+    // Date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      errors.push(`Row ${r + 1}: invalid date "${date}" (expected YYYY-MM-DD)`);
+      continue;
+    }
+
+    let weight = Number(weightRaw);
+    const reps = Number(repsRaw);
+    const rpe = rpeRaw === "" ? undefined : Number(rpeRaw);
+    if (!Number.isFinite(weight) || !Number.isFinite(reps)) {
+      errors.push(`Row ${r + 1}: non-numeric weight/reps`);
+      continue;
+    }
+    if (rpeRaw !== "" && !Number.isFinite(rpe as number)) {
+      errors.push(`Row ${r + 1}: non-numeric RPE`);
+      continue;
+    }
+
+    // Unit conversion if CSV units differ from targetUnits
+    const rowUnits = csvUnits === "lb" || csvUnits === "kg" ? csvUnits : targetUnits;
+    if (rowUnits !== targetUnits) {
+      if (rowUnits === "kg" && targetUnits === "lb") weight = weight * 2.2046226218;
+      if (rowUnits === "lb" && targetUnits === "kg") weight = weight / 2.2046226218;
+      weight = Number(weight.toFixed(2));
+    }
+
+    out.push({
+      id: uid(),
+      date,
+      exercise,
+      category,
+      weight,
+      reps,
+      rpe,
+      notes,
+    });
+  }
+
+  return { sets: out, errors };
+}
+
 /* ------------------------------- Component -------------------------------- */
 export default function App() {
   // PWA: register service worker if present
@@ -198,6 +344,47 @@ export default function App() {
     e.target.value = "";
   }
 
+  function importCSV(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result);
+        const rows = parseCSV(text);
+        const { sets, errors } = rowsToSets(rows, store.units);
+        if (!sets.length) {
+          alert(`CSV import failed:\n- ${errors.join("\n- ")}`);
+        } else {
+          setStore((prev) => ({ ...prev, sets: [...prev.sets, ...sets] }));
+          if (errors.length) {
+            alert(`Imported ${sets.length} sets with warnings:\n- ${errors.join("\n- ")}`);
+          }
+        }
+      } catch (err) {
+        alert(`CSV import failed: ${err}`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function downloadCsvTemplate() {
+    const example = [
+      ["date", "exercise", "category", "weight", "reps", "rpe", "notes", "units"],
+      ["2025-10-10", "Barbell Squat", "legs", "135", "8", "7.5", "paused last 2", "lb"],
+    ]
+      .map((r) => r.join(","))
+      .join("\n");
+
+    const url = URL.createObjectURL(new Blob([example], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "workout-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   /* -------------------------------- Render -------------------------------- */
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 p-6">
@@ -220,21 +407,47 @@ export default function App() {
                 <option value="kg">kg</option>
               </select>
             </div>
+
+            {/* Export JSON */}
             <button
               onClick={exportJSON}
               className="inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
             >
               <Download className="h-4 w-4 mr-2" /> Export
             </button>
+
+            {/* Import JSON */}
             <div>
               <input id="jsonFile" type="file" accept="application/json" className="hidden" onChange={importJSON} />
               <label
                 htmlFor="jsonFile"
                 className="cursor-pointer inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
+                title="Import workouts from JSON"
               >
-                <Upload className="h-4 w-4 mr-2" /> Import
+                <Upload className="h-4 w-4 mr-2" /> Import JSON
               </label>
             </div>
+
+            {/* Import CSV */}
+            <div>
+              <input id="csvFile" type="file" accept=".csv,text/csv" className="hidden" onChange={importCSV} />
+              <label
+                htmlFor="csvFile"
+                className="cursor-pointer inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
+                title="Import workouts from CSV"
+              >
+                <Upload className="h-4 w-4 mr-2" /> Import CSV
+              </label>
+            </div>
+
+            {/* CSV Template */}
+            <button
+              onClick={downloadCsvTemplate}
+              className="inline-flex items-center px-3 py-2 rounded-md border border-neutral-700 hover:bg-neutral-800 text-sm"
+              title="Download CSV template"
+            >
+              <Download className="h-4 w-4 mr-2" /> CSV Template
+            </button>
           </div>
         </header>
 
@@ -408,10 +621,7 @@ export default function App() {
                   <PolarGrid />
                   <PolarAngleAxis dataKey="cat" tick={{ fill: "#d4d4d8", fontSize: 12 }} />
                   <PolarRadiusAxis angle={90} domain={[0, 10]} tick={{ fill: "#a1a1aa", fontSize: 10 }} />
-                  <Tooltip
-                    formatter={tonnageFormatter}
-                    labelFormatter={(label: string) => String(label)}
-                  />
+                  <Tooltip formatter={tonnageFormatter} labelFormatter={(label: string) => String(label)} />
                   <Radar name="Balance" dataKey="score" stroke="#34d399" fill="#34d399" fillOpacity={0.4} />
                 </RadarChart>
               </ResponsiveContainer>
