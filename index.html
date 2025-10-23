@@ -2,10 +2,48 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <title>Workout Tracker</title>
+
+    <!-- (Optional) If you added a manifest in /public -->
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>workout-tracker</title>
+
+    <!-- Print styles to match the Integrative Health Wheel vibe -->
+    <style>
+      @media print {
+        :root { color-scheme: light; }
+        html, body {
+          background: #ffffff !important;
+          color: #000000 !important;
+        }
+        /* Hide interactive controls/actions */
+        header button,
+        header label[for="jsonFile"],
+        header label[for="csvFile"],
+        header input[type="file"],
+        header select,
+        .no-print {
+          display: none !important;
+        }
+        /* Hide the input-heavy sections (Add Set + Filters/Totals) */
+        main > div > section:nth-of-type(1),
+        main > div > section:nth-of-type(2) {
+          display: none !important;
+        }
+        /* Tidy page for printing */
+        a { color: inherit; text-decoration: none; }
+        * {
+          box-shadow: none !important;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
